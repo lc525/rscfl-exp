@@ -1,0 +1,44 @@
+{
+  "exp-name": "sample_exp",
+  "exp-descr": "Sample experiment configuration file showing typical syntax options",
+  "exp-run-DAQ": "True",
+  "script-branch": "master",
+  "rscfl-scripts": "/home/oc243/resourceful/src/scripts",
+  "bg-load": { "run": "True",
+               "start": "%rscfl-scripts%/hypervisor_os_stress.py -g 5 -w 3 -i /dev/rscfl_vg/ubuntu-2015-02-23 -m 512 -v 1 -s 0 -c \"while [ true ] ; do stress -c 1 --timeout 1 ; sleep 0.8; done\" \"ping -i 0.2 www.cl.cam.ac.uk\" -f 2 3 -p \"true\" -e \"start_bg-stress\" \"start_bg-ping\"",
+                "stop": "%rscfl-scripts%/hypervisor_stop_stress.sh"
+             },
+  "dom0-load": { "run": "False" },
+  "fg-load": { "run": "True",
+               "script": "./exp_vguest.sh -i 250000 -c 10 -f 10K.txt -d %b.data_dir% -o %exp-name%",
+               "out": ["%b.data_dir%/rexp.dat",
+                       "%b.data_dir%/rexp.mdat"],
+               "aux-out": [ "%b.data_dir%/ab.run" ]
+             },
+  "fg-process-raw": { "script": "%b.script_dir%/hotcloud_parse.py",
+                      "out": ["%b.data_dir%/%exp-name%.subsys.sdat",
+                              "%b.data_dir%/%exp-name%.totals.sdat"]
+                    },
+  "train-model": { "run": "True",
+                   "bare-metal-exp": "rscfl_bm",
+                   "bm-sdat": "rscfl_bm.totals.sdat",
+                   "virt-sdat": "%b.data_dir%/%exp-name%.totals.sdat",
+                   "out": "%b.data_dir%/%exp-name%.train.pickle",
+                   "aux-out": ["%b.data_dir%/training.scatter.png", "%b.data_dir%/training.predict.png"],
+                   "script": "%b.script_dir%/rscfl_train_binning-256.py %l.bm_file% %l.vm_file% %l.out_tfile%"
+                 },
+  "plot-scatter": { "run": "True",
+                    "name": "%b.data_dir%/%exp-name%.totals.sdat",
+                    "out": "%exp-name%_scatter.png",
+                    "script": "%b.script_dir%/hotcloud_scatter_color.py %l.d_file_path% %l.out_file%"
+                  },
+  "plot-expl": { "run": "False" },
+  "plot-heatmap": { "run": "False" },
+  "plot-inducedlat-hist": {
+      "run": "True",
+      "name": "%b.data_dir%/%exp-name%.totals.sdat",
+      "out": "%exp-name%_inducedlat.png",
+      "script": "%b.script_dir%/rscfl_predict.py %l.train_file% %l.d_file_path% %l.out_file%"
+   }
+
+}
