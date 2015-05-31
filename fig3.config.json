@@ -1,0 +1,16 @@
+{
+  "exp-name": "hotcloud_fig3",
+  "exp-descr": "reproduce HotCloud Fig3 results from raw data",
+  "exp-run-DAQ": "False",
+  "train-model": { "run": "False"},
+  "plot-scatter": { "run": "External",
+                    "use-from": "legacy_exp",
+                    "name": "realistic_normal_xen256_500K.totals.sdat",
+                    "out": "%exp-name%_scatter.png",
+                    "script": "%b.script_dir%/hotcloud_scatter_color.py %l.d_file_path% %l.out_file%"
+                  },
+  "plot-expl": { "run": "False" },
+  "plot-heatmap": { "run": "False" },
+  "plot-inducedlat-hist": { "run": "False" }
+
+}

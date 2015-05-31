@@ -1,0 +1,20 @@
+{
+  "exp-name": "hotcloud_fig5",
+  "exp-descr": "reproduce HotCloud Fig5 results from raw data",
+  "exp-run-DAQ": "False",
+  "train-model": { "run": "External",
+                   "use-from": "legacy_exp",
+                   "name": "512-trained.pickle"
+                 },
+  "plot-scatter": { "run": "False"},
+  "plot-expl": { "run": "False" },
+  "plot-heatmap": { "run": "False" },
+  "plot-inducedlat-hist": {
+      "run": "External",
+      "use-from": "legacy_exp",
+      "name": ["realistic_clamav.totals.sdat", "realistic_normal.totals.sdat"],
+      "out": ["%exp-name%_inducedlat_clamav.png", "%exp-name%_inducedlat_normal.png"],
+      "script": "%b.script_dir%/rscfl_predict.py %l.train_file% %l.d_file_path% %l.out_file%"
+   }
+
+}

@@ -1,11 +1,23 @@
 #!/usr/bin/env python2.7
 
+# Resourceful experiment reproduction script
+#
+# Rscfl experiments typically require coordination between multiple machines
+# and actions like starting/stopping services and containers/VMs.
+#
+# This script uses the python fabric library to automate that process so that
+# minimal user interaction is needed. It can also be used for reproducing
+# figures/results from previous experimental runs.
+#
+# Lucian Carata, 2015
+
 import argparse
 import fabric
 import fabric.api
 from   fabric.contrib.files import exists
 from   fabric.contrib.console import confirm
 from   fabric.api import settings
+import paramiko
 import json
 import subprocess
 import time
@@ -27,6 +39,7 @@ except:
 # when running, so always consider the args.* versions authoritative
 
 # machine running ab (the lighttpd load), data pre-processing and plotting
+# set this to localhost if you're just reproducing paper figures
 fg_load_vm = "rscfl-demo.dtg.cl.cam.ac.uk"
 
 # machine controlling background load (nr of vms and their tasks);
@@ -46,8 +59,12 @@ def create_experiment_dir(location, dirname, meta):
     i = 1
     out_path = os.path.normpath(location + "/" + dirname)
     while fabric.contrib.files.exists(out_path):
-        out_path = os.path.normpath(location + "/" + dirname + str(i))
+        out_path = os.path.normpath(location + "/" + dirname + "_" + str(i))
         i = i + 1
+    if i > 1:
+        exp_dir_name = dirname + "_" + str(i-1)
+    else:
+        exp_dir_name = dirname
     result_path = os.path.normpath(out_path + "/results")
     data_path = os.path.normpath(out_path + "/data")
     print("Creating experiment in %s" % fabric.api.env.host_string+":"+out_path)
@@ -55,7 +72,7 @@ def create_experiment_dir(location, dirname, meta):
             (out_path, '{\n  \"descr\": \"' + meta + '\"', out_path), pty=True)
     fabric.api.run("mkdir -p %s" % result_path, pty=True)
     fabric.api.run("mkdir -p %s" % data_path, pty=True)
-    return (out_path, result_path, data_path)
+    return (out_path, result_path, data_path, exp_dir_name)
 
 @fabric.api.task
 def add_meta(location, meta):
@@ -204,15 +221,17 @@ class BgLoadScanIO(StringIO):
 
 def main():
     fabric.api.env.use_ssh_config = True
+    fabric.api.env.forward_agent = True
     parser = argparse.ArgumentParser(description="(re-)produce rscfl experiments")
     parser.add_argument('-n', '--exp', dest="exp_name", default="noname",
                         help="Experiment name")
     parser.add_argument('-c', '--config', dest="exp_cfg", default="nocfg",
                         help="Experiment configuration")
-    parser.add_argument('-d', '--dest', dest="out_dir",
+    parser.add_argument('-s', '--scripts', dest="out_dir",
                         default="/home/lc525/rscfl_exp",
                         help="Destination directory for experiment data. "
-                             "This must exist on fg_load_vm")
+                             "This must exist on fg_load_vm and it must contain"
+                             " all the data processing scripts")
     parser.add_argument('--meta', dest="meta", default="nometa",
                         help="Additional description/metadata for experiment")
     parser.add_argument('--fg_load_vm', dest="fg_load_vm",
@@ -264,6 +283,21 @@ def main():
 
 
     ## Here we go, preparing global experiment metadata
+        msg="""
+Checklist (please verify that the following are true):
+  * iptables configured on {0};
+  * rscfl is running on {0}, release build;
+  * lighttpd is running on {0};
+  * bash scripts you run have the #!/bin/bash directive
+
+If one of those conditions is false, expect the script to stall and fail."""
+
+    run_DAQ = False
+    if cfg_json['exp-run-DAQ'] == "True":
+        run_DAQ = True
+
+    if run_DAQ == True:
+        print(msg.format(args.target_vm))
 
     # Create experiment directory on fg_load_vm
     exp_dir = fabric.api.execute(create_experiment_dir,
@@ -271,12 +305,19 @@ def main():
                                    hosts=args.fg_load_vm)
 
     # Infer basic experiment metadata (virt/no_virt, rscfl version, uname, etc)
-    (out_path, result_path, data_path) = exp_dir[args.fg_load_vm]
+    (out_path, result_path, data_path, exp_dir_name) = exp_dir[args.fg_load_vm]
     config_vars['exp_dir'] = out_path
+    config_vars['exp_dir_name'] = exp_dir_name
     config_vars['script_dir'] = args.out_dir
     config_vars['data_dir'] = data_path
     config_vars['result_dir'] = result_path
-    base_meta = fabric.api.execute(get_target_meta, hosts=args.target_vm)
+    config_vars['target_vm'] = args.target_vm
+
+    base_meta = {}
+    if run_DAQ == True:
+        base_meta = fabric.api.execute(get_target_meta, hosts=args.target_vm)
+    else:
+        base_meta[args.target_vm] = ", \"daq\": \"False\""
     script_rev = fabric.api.execute(get_script_rev, args.out_dir,
                                     hosts=args.fg_load_vm)
 
@@ -288,15 +329,6 @@ def main():
                        hosts=args.fg_load_vm)
 
     if args.manual_exp == True:
-        msg="""
-Checklist (please verify that the following are true):
-  * iptables configured on {0};
-  * rscfl is running on {0}, release build;
-  * lighttpd is running on {0};
-  * bash scripts you run have the #!/bin/bash directive
-
-Continue?..."""
-
         confirm = fabric.contrib.console.confirm(msg.format(args.target_vm))
         if not confirm:
             end_meta(out_path, args.fg_load_vm)
@@ -324,60 +356,65 @@ Continue?..."""
                            out_path, ">fg_load=\n" + fg_load_meta,
                            hosts=args.fg_load_vm)
     else:
-        # reset lighttpd accounting data
-        requests.get("http://%s/rscfl/clear" % args.target_vm, proxies=proxies)
+        if cfg_json['exp-run-DAQ'] == "True":
+            # reset lighttpd accounting data
+            requests.get("http://%s/rscfl/clear" % args.target_vm, proxies=proxies)
 
-        # send mark for id 0 (required)
-        payload = {'mark': 'exp_%s' % args.exp_name }
-        requests.post("http://%s/mark" % args.target_vm, payload, proxies=proxies)
+            # send mark for id 0 (required)
+            payload = {'mark': 'exp_%s' % args.exp_name }
+            requests.post("http://%s/mark" % args.target_vm, payload, proxies=proxies)
 
 
-        # run background load
-        bgld = cfg_json['bg-load']
-        outStream = BgLoadScanIO(args, cfg_json)
-        if(bgld['run'] == "True"):
-            bg_load_cmd = config_process_vars(bgld['start'], cfg_json)
-            bg_load_cmd_esc = bg_load_cmd.replace('"', '\\\\"')
-            fabric.api.execute(add_meta, out_path, ", \"bg_load_cmd\": \"%s\"" % bg_load_cmd_esc, hosts=args.fg_load_vm)
-            fabric.api.output["stdout"] = True
-            fabric.api.execute(run_bg_load, bg_load_cmd, outStream, hosts=args.bg_load_vm)
-            fabric.api.output["stdout"] = False
+            # run background load
+            bgld = cfg_json['bg-load']
+            outStream = BgLoadScanIO(args, cfg_json)
+            if(bgld['run'] == "True"):
+                bg_load_cmd = config_process_vars(bgld['start'], cfg_json)
+                bg_load_cmd_esc = bg_load_cmd.replace('"', '\\\\"')
+                fabric.api.execute(add_meta, out_path,
+                        ", \"bg_load_cmd\": \"%s\"" % bg_load_cmd_esc, hosts=args.fg_load_vm)
+                fabric.api.output["stdout"] = True
+                fabric.api.execute(run_bg_load, bg_load_cmd, outStream, hosts=args.bg_load_vm)
+                fabric.api.output["stdout"] = False
 
-        # run foreground load
-        # <this is triggered by the stdout of the background load and executed
-        #  by BgLoadScanIO>
-        fgld = cfg_json['fg-load']
-        if(bgld['run'] == "False" and fgld['run'] == "True"):
-            outStream.write("$ESTART")
-        outStream.close()
+            # run foreground load
+            # <this is triggered by the stdout of the background load and executed
+            #  by BgLoadScanIO>
+            fgld = cfg_json['fg-load']
+            if(bgld['run'] == "False" and fgld['run'] == "True"):
+                outStream.write("$ESTART")
+            outStream.close()
 
-        # stop bg load (no reason to keep loading the vms)
-        if(bgld['run'] == "True"):
-            stop_bg_cmd = config_process_vars(cfg_json['stop-bg-load'], cfg_json)
-            fabric.api.execute(run_cmd, stop_bg_cmd,
-                               "Stopping background load", hosts=args.bg_load_vm)
+            # stop bg load (no reason to keep loading the vms)
+            if(bgld['run'] == "True"):
+                stop_bg_cmd = config_process_vars(cfg_json['stop-bg-load'], cfg_json)
+                fabric.api.execute(run_cmd, stop_bg_cmd,
+                                   "Stopping background load", hosts=args.bg_load_vm)
 
-        # run processing
-        if(fgld['run'] == "True"):
-            process_cmd = config_process_vars(cfg_json['fg-process-raw']['script'], cfg_json)
-            process_cmd = process_cmd + " " + config_vars['script_dir'] + "/"
-            fabric.api.execute(run_cmd, process_cmd,
-                               "Parsing experiment data on %s" % args.fg_load_vm,
-                               hosts=args.fg_load_vm)
+            # run processing
+            if(fgld['run'] == "True"):
+                process_cmd = config_process_vars(cfg_json['fg-process-raw']['script'], cfg_json)
+                process_cmd = process_cmd + " " + config_vars['script_dir'] + "/"
+                fabric.api.execute(run_cmd, process_cmd,
+                                   "Parsing experiment data on %s" % args.fg_load_vm,
+                                   hosts=args.fg_load_vm)
+            # DAQ done
 
+        local_vars = {}
         # train model
         tm = cfg_json['train-model']
         train_file = ""
         training_meta = ", \"training\": { \"run\": \"" + tm['run'] + "\""
         if(tm['run'] == "True"):
-           bm_file = os.path.join(config_vars['script_dir'], tm['bare-metal-exp'], "data", tm['bm-sdat'])
+           bm_file = os.path.join(config_vars['script_dir'], tm['bare-metal-exp'],
+                                  "data", tm['bm-sdat'])
            vm_file = config_process_vars(tm['virt-sdat'], cfg_json)
            out_tfile = config_process_vars(tm['out'], cfg_json)
            train_file = out_tfile
-           local_vars = {}
            local_vars['bm_file'] = bm_file
            local_vars['vm_file'] = vm_file
            local_vars['out_tfile'] = out_tfile
+           local_vars['train_file'] = out_tfile
            training_meta = training_meta + ", \"bare-metal\": \"" + bm_file + "\""
            training_meta = training_meta + ", \"virt\": \"" + vm_file + "\""
            train_script = config_process_vars(tm['script'], cfg_json, local_vars)
@@ -390,20 +427,81 @@ Continue?..."""
                                   config_vars['result_dir'], True,
                                   hosts=args.fg_load_vm)
         elif(tm['run'] == "External"):
-            b=3
+            train_fp = os.path.join(config_vars['script_dir'], tm['use-from'], "data", tm['name'])
+            training_meta = training_meta + ", \"file\": \"" + train_fp + "\""
+            local_vars['train_file'] = train_fp
         elif(tm['run'] == "False"):
             print("Skipping gaussian process training phase")
-        training_meta = training_meta + "}"
+        training_meta = training_meta + " }"
         fabric.api.execute(add_meta, out_path, training_meta, hosts=args.fg_load_vm)
+
+        data_fp = []
+        out_fp = []
+
+        #plot_scatter
+        pscttr = cfg_json['plot-scatter']
+        run_scatter = False;
+        if pscttr['run'] == "True":
+           run_scatter = True
+           data_fp.append(config_process_vars(cfg_json['fg-process-raw']['out'][1], cfg_json))
+           out_fp.append(os.path.join(result_path, config_process_vars(pscttr['out'], cfg_json)))
+        elif pscttr['run'] == "External":
+           run_scatter = True
+           if type(pscttr['name']) in (list,):
+               for idx, file_name in enumerate(pscttr['name']):
+                   data_fp.insert(idx, os.path.join(config_vars['script_dir'], pscttr['use-from'], "data", file_name))
+                   out_fp.insert(idx, os.path.join(result_path, config_process_vars(pscttr['out'][idx], cfg_json)))
+           else:
+               data_fp.append(os.path.join(config_vars['script_dir'], pscttr['use-from'], "data", pscttr['name']))
+               out_fp.append(os.path.join(result_path, config_process_vars(pscttr['out'], cfg_json)))
+        if run_scatter == True:
+            for idx, data_file in enumerate(data_fp):
+                local_vars['d_file_path'] = data_file
+                local_vars['out_file'] = out_fp[idx]
+                scttr_script = config_process_vars(pscttr['script'], cfg_json, local_vars)
+                fabric.api.execute(run_cmd, scttr_script,
+                        "Scatter plot latency vs sched-out [%d of %d]" % (idx + 1, len(data_fp)),
+                        hosts=args.fg_load_vm)
+
+        #plot-inducedlat-hist
+        data_fp = []
+        out_fp = []
+        pilh = cfg_json['plot-inducedlat-hist']
+        run_pilh = False;
+        if pilh['run'] == "True":
+           run_pilh = True
+           data_fp.append(config_process_vars(cfg_json['fg-process-raw']['out'][1], cfg_json))
+           out_fp.append(os.path.join(result_path, config_process_vars(pilh['out'], cfg_json)))
+        elif pilh['run'] == "External":
+           run_pilh = True
+           if type(pilh['name']) in (list,):
+               for idx, file_name in enumerate(pilh['name']):
+                   data_fp.insert(idx, os.path.join(config_vars['script_dir'], pilh['use-from'], "data", file_name))
+                   out_fp.insert(idx, os.path.join(result_path, config_process_vars(pilh['out'][idx], cfg_json)))
+           else:
+               data_fp.append(os.path.join(config_vars['script_dir'], pilh['use-from'], "data", pilh['name']))
+               out_fp.append(os.path.join(result_path, config_process_vars(pilh['out'], cfg_json)))
+        if run_pilh == True:
+            for idx, data_file in enumerate(data_fp):
+                local_vars['d_file_path'] = data_file
+                local_vars['out_file'] = out_fp[idx]
+                pilh_script = config_process_vars(pilh['script'], cfg_json, local_vars)
+                fabric.api.execute(run_cmd, pilh_script,
+                        "Histograms of hypervisor-induced latency [%d of %d]" % (idx + 1, len(data_fp)),
+                        hosts=args.fg_load_vm)
 
     end_meta(out_path, args.fg_load_vm)
     print("Copying results locally")
     fabric.api.execute(copy_from_remote, config_vars['result_dir'],
-                       os.path.join(".", args.exp_name),
+                       os.path.join(".", exp_dir_name),
                        hosts=args.fg_load_vm)
     fabric.api.execute(copy_from_remote,
                        os.path.join(config_vars['exp_dir'], "meta"),
-                       os.path.join(".", args.exp_name),
+                       os.path.join(".", exp_dir_name),
+                       hosts=args.fg_load_vm)
+    fabric.api.execute(copy_from_remote,
+                       os.path.join(config_vars['exp_dir'], "config.json"),
+                       os.path.join(".", exp_dir_name),
                        hosts=args.fg_load_vm)
     print("Teleporting unicorns from another dimension...[Experiment Done]")
 
