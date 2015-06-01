@@ -12,6 +12,7 @@
   "plot-inducedlat-hist": {
       "run": "External",
       "use-from": "legacy_exp",
+      "multiple-file-args": "False",
       "name": ["realistic_clamav.totals.sdat", "realistic_normal.totals.sdat"],
       "out": ["%exp-name%_inducedlat_clamav.png", "%exp-name%_inducedlat_normal.png"],
       "script": "%b.script_dir%/rscfl_predict.py %l.train_file% %l.d_file_path% %l.out_file%"
