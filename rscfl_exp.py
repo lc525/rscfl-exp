@@ -228,7 +228,7 @@ def main():
     parser.add_argument('-c', '--config', dest="exp_cfg", default="nocfg",
                         help="Experiment configuration")
     parser.add_argument('-s', '--scripts', dest="out_dir",
-                        default="/home/lc525/rscfl_exp",
+                        default="%s/rscfl_exp" % os.environ["HOME"],
                         help="Destination directory for experiment data. "
                              "This must exist on fg_load_vm and it must contain"
                              " all the data processing scripts")
