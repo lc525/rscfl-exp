@@ -482,13 +482,22 @@ If one of those conditions is false, expect the script to stall and fail."""
                data_fp.append(os.path.join(config_vars['script_dir'], pilh['use-from'], "data", pilh['name']))
                out_fp.append(os.path.join(result_path, config_process_vars(pilh['out'], cfg_json)))
         if run_pilh == True:
-            for idx, data_file in enumerate(data_fp):
-                local_vars['d_file_path'] = data_file
-                local_vars['out_file'] = out_fp[idx]
+            if 'multiple-file-args' in pilh.keys() and pilh['multiple-file-args'] == "True":
+                for idx, data_file in enumerate(data_fp):
+                    local_vars['d_file_path'+str(idx)] = data_file
+                local_vars['out_file'] = out_fp[0]
                 pilh_script = config_process_vars(pilh['script'], cfg_json, local_vars)
                 fabric.api.execute(run_cmd, pilh_script,
-                        "Histograms of hypervisor-induced latency [%d of %d]" % (idx + 1, len(data_fp)),
+                        "Histogram of hypervisor-induced latency",
                         hosts=args.fg_load_vm)
+            else:
+                for idx, data_file in enumerate(data_fp):
+                    local_vars['d_file_path'] = data_file
+                    local_vars['out_file'] = out_fp[idx]
+                    pilh_script = config_process_vars(pilh['script'], cfg_json, local_vars)
+                    fabric.api.execute(run_cmd, pilh_script,
+                            "Histograms of hypervisor-induced latency [%d of %d]" % (idx + 1, len(data_fp)),
+                            hosts=args.fg_load_vm)
 
     end_meta(out_path, args.fg_load_vm)
     print("Copying results locally")
