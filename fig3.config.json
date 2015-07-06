@@ -6,7 +6,7 @@
   "plot-scatter": { "run": "External",
                     "use-from": "legacy_exp",
                     "name": "realistic_normal_xen256_500K.totals.sdat",
-                    "out": "%exp-name%_scatter.png",
+                    "out": "%exp-name%_scatter.svg",
                     "script": "%b.script_dir%/hotcloud_scatter_color.py %l.d_file_path% %l.out_file%"
                   },
   "plot-expl": { "run": "False" },

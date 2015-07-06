@@ -477,7 +477,8 @@ If one of those conditions is false, expect the script to stall and fail."""
            if type(pilh['name']) in (list,):
                for idx, file_name in enumerate(pilh['name']):
                    data_fp.insert(idx, os.path.join(config_vars['script_dir'], pilh['use-from'], "data", file_name))
-                   out_fp.insert(idx, os.path.join(result_path, config_process_vars(pilh['out'][idx], cfg_json)))
+               for idx, out_name in enumerate(pilh['out']):
+                   out_fp.insert(idx, os.path.join(result_path, config_process_vars(out_name, cfg_json)))
            else:
                data_fp.append(os.path.join(config_vars['script_dir'], pilh['use-from'], "data", pilh['name']))
                out_fp.append(os.path.join(result_path, config_process_vars(pilh['out'], cfg_json)))
